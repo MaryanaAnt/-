@@ -1,170 +1,353 @@
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import pandas as pd
 from process import (
-    load_sales_data, preprocess_data, calculate_revenue_by_period,
-    calculate_profit_by_period, aggregate_sales_by_category,
-    get_top_n_products, analyze_inventory_turnover, get_inventory_insights
+    load_sales_data,
+    preprocess_data,
+    calculate_revenue_by_period,
+    calculate_profit_by_period,
+    aggregate_sales_by_category,
+    get_top_n_products,
+    analyze_inventory_turnover
 )
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+class InventoryManager:
+    def __init__(self):
+        self.data = None
+        self.data_clean = None
+        # Настройка стиля графиков
+        plt.style.use('seaborn-v0_8-darkgrid')
+        sns.set_palette("husl")
 
-def save_report_to_file(content, filename="inventory_report.txt"):
-    """Сохраняет отчёт в текстовый файл"""
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print(f"\n✅ Отчёт сохранён в файл: {filename}")
+    def load_data(self, file_path):
+        print(f" Загрузка данных из: {file_path}")
+        self.data = load_sales_data(file_path)
+        if self.data is None:
+            print("ЗАГРУЗКА ДАННЫХ НЕ УДАЛАСЬ")
+            return False
+        return True
 
+    def preprocess(self):
+        if self.data is None:
+            print("НЕТ ДАННЫХ ДЛЯ ПЕРЕРАБОТКИ. СНАЧАЛА ЗАГРУЗИТЕ ФАЙЛ.")
+            return False
+        print("Предобработка данных...")
+        self.data_clean = preprocess_data(self.data)
+        if self.data_clean is None:
+            print("ПЕРЕРАБОТКА НЕ УДАЛАСЬ.")
+            return False
+        print(f"Предобработка завершена. Обработано {len(self.data_clean)} строк.")
+        return True
 
-def present_revenue_by_period(data, period='D'):
-    revenue_data = calculate_revenue_by_period(data, period)
+    def analyze_revenue(self, period='D'):
+        if self.data_clean is None:
+            print("НЕТ ПЕРЕРАБОТАННЫХ ДАННЫХ. Вызовите .preprocess() сначала.")
+            return None
+        print(f" Расчёт выручки по периоду: {period}")
+        return calculate_revenue_by_period(self.data_clean, period)
 
-    if revenue_data.empty:
-        print("Нет данных для визуализации выручки.")
-        return
+    def analyze_profit(self, period='D'):
+        if self.data_clean is None:
+            print("НЕТ ПЕРЕРАБОТАННЫХ ДАННЫХ.")
+            return None
+        print(f"Расчёт прибыли по периоду: {period}")
+        return calculate_profit_by_period(self.data_clean, period)
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(revenue_data['Дата'], revenue_data['Выручка по периоду'], marker='o', linewidth=2, color='green')
-    plt.title(f'Динамика выручки по {("дням" if period=="D" else "неделям" if period=="W" else "месяцам")}', fontsize=16, fontweight='bold')
-    plt.xlabel('Дата')
-    plt.ylabel('Выручка, руб.')
-    plt.grid(True, alpha=0.3)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
+    def analyze_by_category(self):
+        if self.data_clean is None:
+            print("НЕТ ПЕРЕРАБОТАННЫХ ДАННЫХ.")
+            return None
+        print("Анализ продаж по отделам...")
+        return aggregate_sales_by_category(self.data_clean)
 
+    def top_products(self, n=5, metric='quantity'):
+        if self.data_clean is None:
+            print("НЕТ ПЕРЕРАБОТАННЫХ ДАННЫХ.")
+            return None
+        print(f"Топ-{n} товаров по {metric}...")
+        return get_top_n_products(self.data_clean, n, metric)
 
-def visualize_category_analysis(data_clean):
-    category_stats = aggregate_sales_by_category(data_clean)
-    if category_stats.empty:
-        print("Нет данных для визуализации по категориям.")
-        return
+    def inventory_turnover(self, top_n=10):
+        if self.data_clean is None:
+            print("НЕТ ПЕРЕРАБОТАННЫХ ДАННЫХ.")
+            return None
+        print(f"Анализ оборачиваемости товаров (топ-{top_n})...")
+        return analyze_inventory_turnover(self.data_clean, top_n)
 
-    plt.style.use('seaborn-v0_8')
-    fig, axes = plt.subplots(1, len(category_stats.columns), figsize=(5 * len(category_stats.columns), 6))
-    if len(category_stats.columns) == 1:
-        axes = [axes]
-
-    colors = sns.color_palette("husl", len(category_stats))
-
-    for i, metric in enumerate(category_stats.columns):
-        axes[i].bar(category_stats.index, category_stats[metric], color=colors)
-        axes[i].set_title(f'{metric.replace("_", " ").title()} по категориям', fontweight='bold')
-        axes[i].set_ylabel(metric)
-        axes[i].tick_params(axis='x', rotation=45)
-
-    plt.tight_layout()
-    plt.show()
-
-
-def analyze_real_data(cleaned_data, period):
-    profit_data = calculate_profit_by_period(cleaned_data, period)
-    if profit_data is None or profit_data.empty:
-        print("Не удалось рассчитать прибыль.")
-        return
-
-    print("\n" + "="*40)
-    print("АНАЛИЗ 1: ПРИБЫЛЬ ПО ПЕРИОДАМ")
-    print("="*40)
-    print("Прибыль по периодам (первые 10 строк):")
-    print(profit_data.head(10))
-
-    # Визуализация
-    plt.figure(figsize=(12, 6))
-    plt.plot(profit_data['Дата'], profit_data['Прибыль по периоду'], marker='o', linewidth=2, color='blue')
-    plt.title('Динамика прибыли по периодам', fontweight='bold')
-    plt.xlabel('Дата')
-    plt.ylabel('Прибыль, руб.')
-    plt.grid(True, alpha=0.3)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
-
-    print(f"\nСтатистика прибыли:")
-    print(f"Максимальная прибыль: {profit_data['Прибыль по периоду'].max():.2f} руб.")
-    print(f"Минимальная прибыль: {profit_data['Прибыль по периоду'].min():.2f} руб.")
-    print(f"Средняя прибыль: {profit_data['Прибыль по периоду'].mean():.2f} руб.")
-    print(f"Общая прибыль: {profit_data['Прибыль по периоду'].sum():.2f} руб.")
-
-
-def present_top_n_products(data, n, metric):
-    df = get_top_n_products(data, n, metric)
-    if df is None or df.empty:
-        print("Нет данных для топ-товаров.")
-        return
-
-    plt.figure(figsize=(10, 6))
-    if metric == 'quantity':
-        y_col = 'Сумма_Количество упаковок'
-        title = "Топ самых продаваемых товаров по количеству"
-    else:
-        y_col = 'Сумма_Сумма операции'
-        title = "Топ самых продаваемых товаров по выручке"
-
-    # Горизонтальный барплот — НАЗВАНИЯ ТЕПЕРЬ ЧИТАЕМЫ!
-    plt.barh(df['Название товара'], df[y_col], edgecolor='black', color='skyblue')
-    plt.title(title, fontsize=14, fontweight='bold')
-    plt.xlabel(y_col.replace("Сумма_", "").replace("_", " ").title())
-    plt.ylabel('Название товара')
-    plt.gca().invert_yaxis()  # Самые продаваемые — наверху
-    plt.tight_layout()
-    plt.show()
-
-
-def print_inventory_report(data, top_n):
-    inventory_analysis = analyze_inventory_turnover(data, top_n)
-    insights = get_inventory_insights(inventory_analysis)
-
-    report_lines = []
-    report_lines.append("=" * 80)
-    report_lines.append("АНАЛИЗ ДВИЖЕНИЯ ТОВАРОВ И ИХ РЕНТАБЕЛЬНОСТИ")
-    report_lines.append("=" * 80)
-
-    report_lines.append("\nСВОДНАЯ СТАТИСТИКА:")
-    report_lines.append("-" * 40)
-    stats = insights['summary_stats']
-    report_lines.append(f"Всего товаров в анализе: {stats['total_items']}")
-    report_lines.append(f"Общая выручка: {stats['total_revenue']:,.2f} руб.")
-    report_lines.append(f"Общие затраты на закупки: {stats['total_costs']:,.2f} руб.")
-    report_lines.append(f"Общая прибыль: {stats['total_profit']:,.2f} руб.")
-    report_lines.append(f"Средняя рентабельность: {stats['avg_profitability']:.2f}%")
-    report_lines.append(f"Товаров с возможным дефицитом: {stats['items_with_deficit']}")
-    report_lines.append(f"Товаров с возможным излишком: {stats['items_with_excess']}")
-
-    report_lines.append("\nТОВАРЫ С ВОЗМОЖНЫМ ДЕФИЦИТОМ (продажи > поступления):")
-    report_lines.append("-" * 40)
-    if insights['overstock_candidates']:
-        for item in insights['overstock_candidates'][:5]:
-            report_lines.append(f"• {item['Название товара']} ({item['Артикул']})")
-            report_lines.append(f"  Продано: {item['Продано_упаковок']} уп., Поступило: {item['Поступлено_упаковок']} уп.")
-            report_lines.append(f"  Разница: +{item['Разница_упаковок']} уп. (дефицит)")
-    else:
-        report_lines.append("Нет товаров с явным дефицитом")
-
-    report_lines.append("\nТОВАРЫ С ВОЗМОЖНЫМ ИЗЛИШКОМ (поступления > продаж):")
-    report_lines.append("-" * 40)
-    if insights['understock_candidates']:
-        for item in insights['understock_candidates'][:5]:
-            report_lines.append(f"• {item['Название товара']} ({item['Артикул']})")
-            report_lines.append(f"  Продано: {item['Продано_упаковок']} уп., Поступило: {item['Поступлено_упаковок']} уп.")
-            report_lines.append(f"  Разница: {item['Разница_упаковок']} уп. (излишек)")
-    else:
-        report_lines.append("Нет товаров с явным излишком")
-
-    report_lines.append("\nСАМЫЕ ПРИБЫЛЬНЫЕ ТОВАРЫ:")
-    report_lines.append("-" * 40)
-    for item in insights['most_profitable']:
-        profit_status = f"Прибыль: {item['Прибыль']:,.2f} руб." if item['Прибыль'] >= 0 else f"Убыток: {item['Прибыль']:,.2f} руб."
-        report_lines.append(f"• {item['Название товара']} ({item['Артикул']})")
-        report_lines.append(f"  {profit_status} | Рентабельность: {item['Рентабельность_%']:.2f}%")
-
-    report_lines.append("\nНАИМЕНЕЕ ПРИБЫЛЬНЫЕ ТОВАРЫ:")
-    report_lines.append("-" * 40)
-    for item in insights['least_profitable']:
-        profit_status = f"Прибыль: {item['Прибыль']:,.2f} руб." if item['Прибыль'] >= 0 else f"Убыток: {item['Прибыль']:,.2f} руб."
-        report_lines.append(f"• {item['Название товара']} ({item['Артикул']})")
-        report_lines.append(f"  {profit_status} | Рентабельность: {item['Рентабельность_%']:.2f}%")
-
-    report_str = "\n".join(report_lines)
-    print(report_str)
-    save_report_to_file(report_str)  # Сохраняем в файл!
+    # --- МЕТОДЫ ВИЗУАЛИЗАЦИИ ---
+    
+    def plot_revenue_trend(self, period='D', save_path=None):
+        """
+        Визуализация тренда выручки по времени.
+        """
+        if self.data_clean is None:
+            print("НЕТ ДАННЫХ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        revenue_data = self.analyze_revenue(period)
+        if revenue_data is None or revenue_data.empty:
+            print("НЕТ ДАННЫХ О ВЫРУЧКЕ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        plt.figure(figsize=(14, 6))
+        
+        # Определяем название периода для заголовка
+        period_names = {'D': 'дням', 'W': 'неделям', 'M': 'месяцам'}
+        period_name = period_names.get(period, 'дням')
+        
+        plt.plot(revenue_data['Дата'], revenue_data['Выручка'] / 1_000_000, 
+                marker='o', linewidth=2, markersize=6)
+        plt.title(f'Тренд выручки по {period_name}', fontsize=16, fontweight='bold')
+        plt.xlabel('Дата', fontsize=12)
+        plt.ylabel('Выручка (млн руб.)', fontsize=12)
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f" График сохранён: {save_path}")
+        
+        plt.show()
+        return revenue_data
+    
+    def plot_profit_trend(self, period='D', save_path=None):
+        """
+        Визуализация тренда прибыли по времени.
+        """
+        if self.data_clean is None:
+            print("НЕТ ДАННЫХ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        profit_data = self.analyze_profit(period)
+        if profit_data is None or profit_data.empty:
+            print("НЕТ ДАННЫХ О ПРИБЫЛИ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        plt.figure(figsize=(14, 6))
+        
+        period_names = {'D': 'дням', 'W': 'неделям', 'M': 'месяцам'}
+        period_name = period_names.get(period, 'дням')
+        
+        colors = ['green' if p >= 0 else 'red' for p in profit_data['Прибыль']]
+        bars = plt.bar(profit_data['Дата'], profit_data['Прибыль'] / 1_000_000, 
+                      color=colors, alpha=0.7)
+        
+        plt.title(f'Прибыль по {period_name}', fontsize=16, fontweight='bold')
+        plt.xlabel('Дата', fontsize=12)
+        plt.ylabel('Прибыль (млн руб.)', fontsize=12)
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3, axis='y')
+        
+        # Добавляем подписи значений
+        for bar in bars:
+            height = bar.get_height()
+            if abs(height) > 0.1:  # Показываем только значительные значения
+                plt.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.1f}', ha='center', va='bottom' if height >= 0 else 'top',
+                        fontsize=9)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f" График сохранён: {save_path}")
+        
+        plt.show()
+        return profit_data
+    
+    def plot_category_sales(self, metric='Выручка', save_path=None):
+        """
+        Визуализация продаж по категориям.
+        """
+        if self.data_clean is None:
+            print("НЕТ ДАННЫХ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        category_data = self.analyze_by_category()
+        if category_data is None or category_data.empty:
+            print("НЕТ ДАННЫХ ПО КАТЕГОРИЯМ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # Столбчатая диаграмма
+        bars1 = ax1.bar(category_data['Отдел товара'], 
+                       category_data[metric] / 1_000_000, 
+                       color=sns.color_palette("husl", len(category_data)))
+        ax1.set_title(f'{metric} по отделам', fontsize=14, fontweight='bold')
+        ax1.set_xlabel('Отдел товара', fontsize=12)
+        ax1.set_ylabel(f'{metric} (млн руб.)', fontsize=12)
+        ax1.tick_params(axis='x', rotation=45)
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # Добавляем значения на столбцы
+        for bar in bars1:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{height:.1f}', ha='center', va='bottom', fontsize=10)
+        
+        # Круговая диаграмма
+        ax2.pie(category_data[metric], labels=category_data['Отдел товара'],
+               autopct='%1.1f%%', startangle=90, colors=sns.color_palette("husl", len(category_data)))
+        ax2.set_title(f'Доля отделов в {metric.lower()}', fontsize=14, fontweight='bold')
+        ax2.axis('equal')
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"График сохранён: {save_path}")
+        
+        plt.show()
+        return category_data
+    
+    def plot_top_products_chart(self, n=5, metric='quantity', save_path=None):
+        """
+        Визуализация топ-N товаров.
+        """
+        if self.data_clean is None:
+            print("НЕТ ДАННЫХ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        top_products = self.top_products(n, metric)
+        if top_products is None or top_products.empty:
+            print("НЕТ ДАННЫХ О ТОП-ТОВАРАХ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        plt.figure(figsize=(12, 6))
+        
+        # Создаем метки для товаров
+        labels = [f"{row['Название товара']}\n(арт. {row['Артикул']})" 
+                 for _, row in top_products.iterrows()]
+        
+        if metric == 'quantity':
+            values = top_products['Кол-во_упаковок']
+            title = f'Топ-{n} товаров по количеству продаж'
+            ylabel = 'Количество упаковок, шт.'
+        else:
+            values = top_products['Выручка'] / 1_000_000
+            title = f'Топ-{n} товаров по выручке'
+            ylabel = 'Выручка (млн руб.)'
+        
+        bars = plt.barh(labels, values, color=sns.color_palette("viridis", len(top_products)))
+        plt.gca().invert_yaxis()  # Переворачиваем для лучшего отображения
+        plt.title(title, fontsize=16, fontweight='bold')
+        plt.xlabel(ylabel, fontsize=12)
+        
+        # Добавляем значения на столбцы
+        for bar in bars:
+            width = bar.get_width()
+            if metric == 'revenue':
+                label = f'{width:.1f}'
+            else:
+                label = f'{int(width):,}'.replace(',', ' ')
+            plt.text(width * 1.01, bar.get_y() + bar.get_height()/2.,
+                    label, va='center', fontsize=10)
+        
+        plt.grid(True, alpha=0.3, axis='x')
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"График сохранён: {save_path}")
+        
+        plt.show()
+        return top_products
+    
+    def plot_inventory_turnover_chart(self, top_n=10, save_path=None):
+        """
+        Визуализация анализа оборачиваемости товаров.
+        """
+        if self.data_clean is None:
+            print("НЕТ ДАННЫХ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        turnover_data = self.inventory_turnover(top_n)
+        if turnover_data is None or turnover_data.empty:
+            print("НЕТ ДАННЫХ ОБ ОБОРАЧИВАЕМОСТИ ДЛЯ ВИЗУАЛИЗАЦИИ.")
+            return None
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+        
+        # График продаж и поступлений
+        x = range(len(turnover_data))
+        bar_width = 0.35
+        
+        bars1 = ax1.bar([i - bar_width/2 for i in x], turnover_data['Продано_упаковок'], 
+                       bar_width, label='Продано', alpha=0.7, color='green')
+        bars2 = ax1.bar([i + bar_width/2 for i in x], turnover_data['Поступлено_упаковок'], 
+                       bar_width, label='Поступило', alpha=0.7, color='blue')
+        
+        ax1.set_xlabel('Товары', fontsize=12)
+        ax1.set_ylabel('Количество упаковок', fontsize=12)
+        ax1.set_title('Сравнение продаж и поступлений по товарам', fontsize=14, fontweight='bold')
+        ax1.set_xticks(x)
+        # Сокращаем названия для лучшего отображения
+        short_labels = [f"Арт. {row['Артикул']}" for _, row in turnover_data.iterrows()]
+        ax1.set_xticklabels(short_labels, rotation=45, ha='right')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # График разницы
+        colors = ['green' if val >= 0 else 'red' for val in turnover_data['Разница_упаковок']]
+        bars3 = ax2.bar(short_labels, turnover_data['Разница_упаковок'], color=colors, alpha=0.7)
+        ax2.set_xlabel('Товары', fontsize=12)
+        ax2.set_ylabel('Разница (Продано - Поступило)', fontsize=12)
+        ax2.set_title('Разница между продажами и поступлениями', fontsize=14, fontweight='bold')
+        ax2.tick_params(axis='x', rotation=45)
+        ax2.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # Добавляем значения на столбцы
+        for bar in bars3:
+            height = bar.get_height()
+            if abs(height) > 100:  # Показываем только значительные значения
+                ax2.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{int(height):,}'.replace(',', ' '),
+                        ha='center', va='bottom' if height >= 0 else 'top',
+                        fontsize=9)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"График сохранён: {save_path}")
+        
+        plt.show()
+        return turnover_data
+    
+    def create_comprehensive_report(self, output_dir='reports'):
+        """
+        Создает комплексный отчет со всеми визуализациями.
+        """
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+        
+        print(f"\n{'='*60}")
+        print("СОЗДАНИЕ КОМПЛЕКСНОГО ОТЧЕТА С ВИЗУАЛИЗАЦИЕЙ")
+        print('='*60)
+        
+        # 1. Тренд выручки
+        self.plot_revenue_trend(save_path=f"{output_dir}/revenue_trend.png")
+        
+        # 2. Тренд прибыли
+        self.plot_profit_trend(save_path=f"{output_dir}/profit_trend.png")
+        
+        # 3. Анализ по категориям
+        self.plot_category_sales(save_path=f"{output_dir}/category_analysis.png")
+        
+        # 4. Топ товары по количеству
+        self.plot_top_products_chart(n=5, metric='quantity', 
+                                   save_path=f"{output_dir}/top_products_quantity.png")
+        
+        # 5. Топ товары по выручке
+        self.plot_top_products_chart(n=5, metric='revenue', 
+                                   save_path=f"{output_dir}/top_products_revenue.png")
+        
+        # 6. Оборачиваемость
+        self.plot_inventory_turnover_chart(top_n=10, 
+                                          save_path=f"{output_dir}/inventory_turnover.png")
+        
+        print(f"\n Все графики сохранены в папке: {output_dir}/")
+        print("Визуализация завершена!")
