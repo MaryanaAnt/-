@@ -415,4 +415,76 @@ def analyze_inventory_turnover(data_clean, top_n=10):
         
     except Exception as e:
         logger.error(f"ОШИБКА ПРИ АНАЛИЗЕ ОБОРАЧИВАЕМОСТИ: {e}")
-        return None
+        return None 
+    
+def calculate_reorder_point(lead_time_days, avg_daily_sales, safety_stock):
+    """
+    Рассчитывает точку заказа (reorder point).
+    :param lead_time_days: Время выполнения заказа в днях
+    :param avg_daily_sales: Среднесуточные продажи
+    :param safety_stock: Запас безопасности
+    :return: Точка заказа (целое число)
+    """
+    return int(lead_time_days * avg_daily_sales + safety_stock)
+def identify_slow_moving_items(data, days_back=90, sales_threshold=5):
+    """
+    Выявляет товары, которые "застоялись" на складе — мало продаются, но есть в остатках.
+    Параметры:
+        data (pd.DataFrame): Очищенные данные из InventoryManager.data_clean
+        days_back (int): Количество дней назад, за которые анализируется спрос (по умолчанию 90)
+        sales_threshold (int): Максимальное количество проданных упаковок за период, 
+                              после которого товар считается "медленно движущимся" (по умолчанию 5)
+    Возвращает:
+        pd.DataFrame: Таблица с товарами, которые нужно "разогнать"
+                     Столбцы: 'Артикул', 'Название товара', 'Продано за период', 'Текущий остаток', 'Дней с последней продажи'
+    """
+    if data is None or len(data) == 0:
+        return pd.DataFrame()
+
+    # Определяем дату начала анализа
+    cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=days_back)
+
+    # Фильтруем только продажи за последние N дней
+    # Используем реальные имена столбцов!
+    sales_data = data[
+        (data['Тип операции'] == 'Продажа') & 
+        (data['Дата'] >= cutoff_date)
+    ].copy()
+
+    # Группируем по товару: суммируем продажи
+    sales_summary = sales_data.groupby(['Артикул', 'Название товара'])['Количество упаковок, шт.'].sum().reset_index()
+    sales_summary.rename(columns={'Количество упаковок, шт.': 'Продано за период'}, inplace=True)
+
+    # Мы не храним баланс в исходных данных — нужно посчитать: Поступления - Продажи по каждому артикулу
+    # Создаём общий свод по каждому товару
+    all_data = data.copy()
+    # Продажи
+    sales_by_sku = all_data[all_data['Тип операции'] == 'Продажа'].groupby(['Артикул', 'Название товара'])['Количество упаковок, шт.'].sum().reset_index()
+    sales_by_sku.rename(columns={'Количество упаковок, шт.': 'Продано_всего'}, inplace=True)
+    
+    # Поступления
+    purchases_by_sku = all_data[all_data['Тип операции'] == 'Поступление'].groupby(['Артикул', 'Название товара'])['Количество упаковок, шт.'].sum().reset_index()
+    purchases_by_sku.rename(columns={'Количество упаковок, шт.': 'Поступлено_всего'}, inplace=True)
+    
+    # Объединяем: текущий остаток = Поступления - Продажи
+    inventory = sales_by_sku.merge(purchases_by_sku, on=['Артикул', 'Название товара'], how='outer').fillna(0)
+    inventory['Текущий остаток'] = inventory['Поступлено_всего'] - inventory['Продано_всего']
+    
+    # Оставляем только товары с остатком > 0
+    inventory = inventory[inventory['Текущий остаток'] > 0]
+
+    # Объединяем с продажами за последние 90 дней
+    merged = inventory.merge(sales_summary, on=['Артикул', 'Название товара'], how='left').fillna(0)
+
+    # Фильтруем: продажи <= порога
+    slow_moving = merged[merged['Продано за период'] <= sales_threshold].copy()
+
+    # Добавляем: "Дней с последней продажи"
+    last_sale_dates = sales_data.groupby(['Артикул', 'Название товара'])['Дата'].max().reset_index()
+    last_sale_dates['Дней с последней продажи'] = (pd.Timestamp.now() - last_sale_dates['Дата']).dt.days
+    slow_moving = slow_moving.merge(last_sale_dates[['Артикул', 'Название товара', 'Дней с последней продажи']], on=['Артикул', 'Название товара'], how='left')
+
+    # Сортируем
+    slow_moving = slow_moving.sort_values(['Продано за период', 'Дней с последней продажи'], ascending=[True, False])
+    
+    return slow_moving[['Артикул', 'Название товара', 'Продано за период', 'Текущий остаток', 'Дней с последней продажи']].reset_index(drop=True)
