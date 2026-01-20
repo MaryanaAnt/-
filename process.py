@@ -1,296 +1,418 @@
 import pandas as pd
+import numpy as np
+from datetime import datetime
+import logging
+"""
+Задаем настройки логирования, необходимые для отслеживания работы программы 
+и быстрого определения где программа "сломалась", в случае если это произошло
+"""
+logging.basicConfig(level=logging.INFO) # Базовая конфигурация логирования, задающая минимальный уровень важности сообщений
+logger = logging.getLogger(__name__)
 
 def load_sales_data(file_path):
-    REQUIRED_COLS = [
-        "ID операции",
-        "Дата",
-        "Адрес магазина",
-        "Район магазина",
-        "Артикул",
-        "Название товара",
-        "Отдел товара",
-        "Количество упаковок",  # Исправлено: было "Количество упаковок, шт."
-        "Тип операции (продажа/поступление)",  # Исправлено: было "Операция"
-        "Стоимость одной единицы"  # Исправлено: было "Цена руб./шт."
-    ]
+    """
+    Загружает данные из CSV-файла.
+    В конце своей работы возвращает DataFrame или None при ошибке.
+    """
     try:
-        data = pd.read_csv(file_path, sep=";", encoding="utf-8")
-    except Exception:
+        # Пробуем разные кодировки и разделители
         try:
-            data = pd.read_csv(file_path, sep=";", encoding="cp1251")
-        except Exception:
-            print(f"Не удалось прочесть файл, проверьте кодировку и разделитель: {file_path}")
+            df = pd.read_csv(file_path, sep=';', encoding='utf-8')
+            logger.info(f"Успешно загружено с UTF-8 и разделителем ';'")
+        except:
+            try:
+                df = pd.read_csv(file_path, sep=',', encoding='utf-8')
+                logger.info(f"Успешно загружено с UTF-8 и разделителем ','")
+            except:
+                try:
+                    df = pd.read_csv(file_path, sep=';', encoding='cp1251')
+                    logger.info(f"Успешно загружено с CP1251 и разделителем ';'")
+                except:
+                    df = pd.read_csv(file_path, sep=',', encoding='cp1251')
+                    logger.info(f"Успешно загружено с CP1251 и разделителем ','")
+          # Удаляем столбцы 'Unnamed:' если они есть
+        unnamed_cols = [col for col in df.columns if 'Unnamed' in col]
+        if unnamed_cols:
+            df = df.drop(columns=unnamed_cols)
+            logger.info(f"Удалены лишние столбцы: {unnamed_cols}")
+
+        # Логируем доступные столбцы
+        logger.info(f"Доступные столбцы: {list(df.columns)}")
+        
+        # Создаем словарь для переименования столбцов
+        rename_dict = {}
+        
+        # Проверяем и переименовываем столбцы
+        # Количество упаковок, шт. -> Количество упаковок
+        if 'Количество упаковок, шт' in df.columns and 'Количество упаковок, шт.' not in df.columns:
+            rename_dict['Количество упаковок, шт'] = 'Количество упаковок, шт.'
+        # Операция -> Тип операции
+        if 'Операция' in df.columns and 'Тип операции' not in df.columns:
+            rename_dict['Операция'] = 'Тип операции'
+        # Цена руб/шт -> Цена руб./шт.
+        if 'Цена руб/шт' in df.columns and 'Цена руб./шт.' not in df.columns:
+            rename_dict['Цена руб/шт'] = 'Цена руб./шт.'
+
+        # Применяем переименование
+        if rename_dict:
+            df = df.rename(columns=rename_dict)
+            logger.info(f"Переименованы столбцы: {rename_dict}")
+        
+        # Проверяем наличие всех необходимых столбцов после переименования
+        required_columns = ['Дата', 'Артикул', 'Отдел товара', 'Количество упаковок, шт.', 
+                          'Тип операции', 'Цена руб./шт.']
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        if missing_cols:
+            logger.error(f"ОТСУТСТВУЮТ ОБЯЗАТЕЛЬНЫЕ СТОЛБЦЫ: {missing_cols}")
+            logger.info(f"Доступные столбцы после переименования: {list(df.columns)}")
             return None
-
-    missing = [col for col in REQUIRED_COLS if col not in data.columns]
-    if missing:
-        print(f"Не удалось прочесть файл: {file_path}. Отсутствуют обязательные столбцы: {', '.join(missing)}")
+        logger.info(f"Успешно загружено {len(df)} строк из {file_path}")
+        return df
+    except Exception as e:
+        logger.error(f"НЕ УДАЛОСЬ ЗАГРУЗИТЬ ФАЙЛ {file_path}: {e}")
         return None
-
-    return data
-
 
 def preprocess_data(data):
-    if data is None:
+    """
+    Предобработка данных: проверяем наши данные, убираем лишнее, приводим все к одному формату,
+    доваыляем необходимые столбцы.
+    В конце своей работы возвращает DataFrame или None при ошибке.
+    """
+    if data is None or len(data) == 0:
+        logger.error("НЕТ ДАННЫХ ДЛЯ ПЕРЕРАБОТКИ")
         return None
+    df = data.copy()
+    
+    # 1. Преобразование даты
+    try:
+        df['Дата'] = pd.to_datetime(df['Дата'], format='%d.%m.%Y', errors='coerce')
+        invalid_dates = df['Дата'].isna().sum()
+        if invalid_dates > 0:
+            logger.warning(f"Удалено {invalid_dates} строк с некорректными датами")
+            df = df.dropna(subset=['Дата'])
+    except Exception as e:
+        logger.error(f"ОШИБКА ПРЕОБРАЗОВАНИЯ ДАТЫ: {e}")
+        return None
+    # 2. Преобразование числовых столбцов
+    numeric_cols = ['Количество упаковок, шт.', 'Цена руб./шт.']
+    for col in numeric_cols:
+        if col in df.columns:
+            # У десятичных чисел производим замену запятых точками 
+            if df[col].dtype == object:
+                df[col] = df[col].astype(str).str.replace(',', '.')
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    # 3. Удаление строк с пустыми значениями
+    initial_count = len(df)
+    required_cols = ['Дата', 'Артикул', 'Отдел товара', 'Количество упаковок, шт.', 
+                     'Тип операции', 'Цена руб./шт.']
+    df = df.dropna(subset=required_cols)
+    removed_count = initial_count - len(df)
+    if removed_count > 0:
+        logger.info(f"Удалено {removed_count} строк с пустыми значениями")
+    # 4. Создание столбца "Сумма операции"
+    df['Сумма операции'] = df['Количество упаковок, шт.'] * df['Цена руб./шт.']
+    # 5. Проверка наличия отрицательных значений
+    df = df[df['Количество упаковок, шт.'] >= 0]
+    df = df[df['Цена руб./шт.'] >= 0]
 
-    data_clean = data.copy()
-
-    # Преобразование даты
-    data_clean["Дата"] = pd.to_datetime(data_clean["Дата"], errors="coerce", dayfirst=True)
-
-    # Количество упаковок → числовой тип
-    data_clean["Количество упаковок"] = pd.to_numeric(data_clean["Количество упаковок"], errors="coerce")
-
-    # Стоимость: заменяем запятые на точки
-    data_clean["Стоимость одной единицы"] = (
-        data_clean["Стоимость одной единицы"].astype(str).str.replace(",", ".", regex=False)
-    )
-    data_clean["Стоимость одной единицы"] = pd.to_numeric(data_clean["Стоимость одной единицы"], errors="coerce")
-
-    # Удаление строк с пропусками
-    before = len(data_clean)
-    data_clean = data_clean.dropna()
-    removed = before - len(data_clean)
-    if removed > 0:
-        print(f"Удалено строк с пустыми значениями: {removed}")
-
-    # Создание столбца "Сумма операции"
-    data_clean["Сумма операции"] = (
-        data_clean["Количество упаковок"] * data_clean["Стоимость одной единицы"]
-    )
-
-    return data_clean
-
+    logger.info(f"Предобработка завершена. Осталось {len(df)} строк.")
+    return df.reset_index(drop=True)
 
 def get_operational_data(data_clean, operation_type=None):
+    """
+    Отфильтровать датасет по указанному типу операции, удалив ненужные строки. 
+    Если тип не указан (None), вернуть исходный датасет.
+    """
+    if data_clean is None or len(data_clean) == 0:
+        logger.warning("Нет данных для фильтрации.")
+        return None
+    
     if operation_type is None:
         return data_clean.copy()
-
-    # Приводим к нижнему регистру для сравнения
-    operation_type_lower = operation_type.lower().strip()
-    filtered_data = data_clean[
-        data_clean["Тип операции (продажа/поступление)"].str.lower().str.strip() == operation_type_lower
-    ].copy()
+    
+    # Приводим operation_type к строке и проверяем существование значений
+    valid_operations = data_clean['Тип операции'].unique()
+    if operation_type not in valid_operations:
+        logger.warning(f"Тип операции '{operation_type}' не найден. Доступные: {list(valid_operations)}")
+        return None
+    
+    filtered_data = data_clean[data_clean['Тип операции'] == operation_type].copy()
+    logger.info(f"Отфильтровано {len(filtered_data)} строк с типом операции '{operation_type}'")
     return filtered_data
 
-
 def calculate_revenue_by_period(data_clean, period='D'):
-    sales_data = get_operational_data(data_clean, operation_type="продажа")
-    if sales_data.empty:
-        print("Нет данных о продажах для расчета выручки.")
-        return pd.DataFrame(columns=['Дата', 'Выручка по периоду'])
-
-    if period == 'W':
-        revenue_by_period = sales_data.groupby(pd.Grouper(key='Дата', freq='W-MON'))['Сумма операции'].sum().reset_index()
-    else:
-        revenue_by_period = sales_data.groupby(pd.Grouper(key='Дата', freq=period))['Сумма операции'].sum().reset_index()
-
-    revenue_by_period.columns = ['Дата', 'Выручка по периоду']
-    revenue_by_period = revenue_by_period.sort_values('Дата').reset_index(drop=True)
-    return revenue_by_period
-
+    """
+    Рассчитывает общую выручку для каждого указанного временного промежутка.
+    """
+    if data_clean is None or len(data_clean) == 0:
+        logger.warning("Нет данных для расчёта выручки.")
+        return None
+    
+    # Используем только продажи
+    sales_data = get_operational_data(data_clean, operation_type='Продажа')
+    if sales_data is None or len(sales_data) == 0:
+        logger.warning("Нет данных о продажах для расчёта выручки.")
+        return None
+    
+    try:
+        # Группировка по периоду
+        sales_data = sales_data.copy()
+        sales_data['Период'] = sales_data['Дата'].dt.to_period(period)
+        revenue_data = sales_data.groupby('Период').agg({
+            'Сумма операции': 'sum'
+        }).reset_index()
+        
+        # Преобразуем период обратно в дату для начала периода
+        if period == 'D':
+            revenue_data['Дата'] = revenue_data['Период'].dt.to_timestamp()
+        elif period == 'W':
+            revenue_data['Дата'] = revenue_data['Период'].dt.start_time
+        elif period == 'M':
+            revenue_data['Дата'] = revenue_data['Период'].dt.start_time
+        
+        revenue_data = revenue_data[['Дата', 'Сумма операции']]
+        revenue_data = revenue_data.rename(columns={'Сумма операции': 'Выручка'})
+        revenue_data = revenue_data.sort_values('Дата')
+        
+        logger.info(f"Выручка по периоду '{period}' рассчитана. {len(revenue_data)} периодов.")
+        return revenue_data.reset_index(drop=True)
+        
+    except Exception as e:
+        logger.error(f"ОШИБКА ПРИ РАСЧЁТЕ ВЫРУЧКИ ПО ПЕРИОДУ {period}: {e}")
+        return None
 
 def calculate_profit_by_period(data_clean, period='D'):
-    # Доходы от продаж
-    sales_data = get_operational_data(data_clean, "продажа")
-    if sales_data.empty:
-        print("Нет данных о продажах для расчета прибыли.")
+    """
+    Рассчитывает прибыль (доходы - расходы) в периодах.
+    """
+    if data_clean is None or len(data_clean) == 0:
+        logger.warning("Нет данных для расчёта прибыли.")
         return None
-
-    # Расходы: поступления
-    expense_data = get_operational_data(data_clean, "поступление")
-
-    # Группировка доходов
-    if period == 'W':
-        income_by_period = sales_data.groupby(pd.Grouper(key='Дата', freq='W-MON'))['Сумма операции'].sum()
-    else:
-        income_by_period = sales_data.groupby(pd.Grouper(key='Дата', freq=period))['Сумма операции'].sum()
-
-    # Группировка расходов
-    if not expense_data.empty:
-        if period == 'W':
-            expense_by_period = expense_data.groupby(pd.Grouper(key='Дата', freq='W-MON'))['Сумма операции'].sum()
-        else:
-            expense_by_period = expense_data.groupby(pd.Grouper(key='Дата', freq=period))['Сумма операции'].sum()
-    else:
-        expense_by_period = pd.Series(0, index=income_by_period.index)
-
-    # Объединяем и считаем прибыль
-    profit_data = pd.DataFrame({
-        'Доходы': income_by_period,
-        'Расходы': expense_by_period.reindex(income_by_period.index, fill_value=0)
-    }).fillna(0)
-
-    profit_data['Прибыль по периоду'] = profit_data['Доходы'] - profit_data['Расходы']
-    profit_result = profit_data[['Прибыль по периоду']].reset_index()
-    profit_result.columns = ['Дата', 'Прибыль по периоду']
-    profit_result = profit_result.sort_values('Дата').reset_index(drop=True)
-
-    return profit_result
-
+    
+    try:
+        # Получаем продажи и поступления
+        sales = get_operational_data(data_clean, operation_type='Продажа')
+        purchases = get_operational_data(data_clean, operation_type='Поступление')
+        
+        if sales is None or purchases is None:
+            logger.warning("Нет данных о продажах или поступлениях.")
+            return None
+        
+        sales = sales.copy()
+        purchases = purchases.copy()
+        
+        # Добавляем период
+        sales['Период'] = sales['Дата'].dt.to_period(period)
+        purchases['Период'] = purchases['Дата'].dt.to_period(period)
+        
+        # Группируем продажи (доходы)
+        revenue_by_period = sales.groupby('Период').agg({
+            'Сумма операции': 'sum'
+        }).reset_index()
+        revenue_by_period = revenue_by_period.rename(columns={'Сумма операции': 'Доходы'})
+        
+        # Группируем поступления (расходы)
+        expenses_by_period = purchases.groupby('Период').agg({
+            'Сумма операции': 'sum'
+        }).reset_index()
+        expenses_by_period = expenses_by_period.rename(columns={'Сумма операции': 'Расходы'})
+        
+        # Объединяем
+        profit_data = pd.merge(revenue_by_period, expenses_by_period, on='Период', how='outer').fillna(0)
+        
+        # Рассчитываем прибыль
+        profit_data['Прибыль'] = profit_data['Доходы'] - profit_data['Расходы']
+        
+        # Преобразуем период в дату
+        if period == 'D':
+            profit_data['Дата'] = profit_data['Период'].dt.to_timestamp()
+        elif period == 'W':
+            profit_data['Дата'] = profit_data['Период'].dt.start_time
+        elif period == 'M':
+            profit_data['Дата'] = profit_data['Период'].dt.start_time
+        
+        profit_data = profit_data[['Дата', 'Прибыль']]
+        profit_data = profit_data.sort_values('Дата')
+        
+        logger.info(f"Прибыль по периоду '{period}' рассчитана. {len(profit_data)} периодов.")
+        return profit_data.reset_index(drop=True)
+        
+    except Exception as e:
+        logger.error(f"ОШИБКА ПРИ РАСЧЁТЕ ПРИБЫЛИ ПО ПЕРИОДУ {period}: {e}")
+        return None
 
 def aggregate_sales_by_category(data_clean):
-    sales_data = get_operational_data(data_clean, "продажа")
-    if sales_data.empty:
-        return pd.DataFrame()
-
-    agg_dict = {}
-    if 'Сумма операции' in sales_data.columns:
-        agg_dict['Выручка'] = ('Сумма операции', 'sum')
-    if 'Количество упаковок' in sales_data.columns:
-        agg_dict['Проданных единиц'] = ('Количество упаковок', 'sum')
-    if 'Артикул' in sales_data.columns:
-        agg_dict['Уникальных товаров'] = ('Артикул', 'nunique')
-
-    sales_by_category = sales_data.groupby('Отдел товара').agg(**agg_dict)
-    category_stats = sales_by_category.sort_index()
-    return category_stats
-
-
-def get_top_n_products(data_clean, n=5, metric='quantity', date='all'):
-    sales_data = get_operational_data(data_clean, "продажа")
-
-    if date != 'all':
-        try:
-            date = pd.to_datetime(date)
-            sales_data = sales_data[sales_data["Дата"] == date]
-        except:
-            print("Некорректная дата. Используется весь период.")
-            date = 'all'
-
-    if metric == 'quantity':
-        agg_col = 'Количество упаковок'
-        result_col = 'Сумма_Количество упаковок'
-        agg_func = 'sum'
-    elif metric == 'revenue':
-        agg_col = 'Сумма операции'
-        result_col = 'Сумма_Сумма операции'
-        agg_func = 'sum'
-    else:
+    """
+    Группирует все данные по категориям товаров (“Отдел товаров”)
+    и рассчитывает для каждой категории ключевые метрики.
+    """
+    if data_clean is None or len(data_clean) == 0:
+        logger.warning("Нет данных для агрегации по категориям.")
+        return None
+    
+    try:
+        # Получаем только продажи
+        sales_data = get_operational_data(data_clean, operation_type='Продажа')
+        if sales_data is None or len(sales_data) == 0:
+            logger.warning("Нет данных о продажах.")
+            return None
+        
+        # Получаем только поступления
+        purchase_data = get_operational_data(data_clean, operation_type='Поступление')
+        
+        # Группируем продажи по категориям
+        sales_by_category = sales_data.groupby('Отдел товара').agg({
+            'Сумма операции': 'sum',
+            'Количество упаковок, шт.': 'sum',
+            'Артикул': 'nunique'
+        }).reset_index()
+        
+        sales_by_category = sales_by_category.rename(columns={
+            'Сумма операции': 'Выручка',
+            'Количество упаковок, шт.': 'Проданных_единиц',
+            'Артикул': 'Уникальных_товаров'
+        })
+        
+        # Группируем поступления по категориям (если есть)
+        if purchase_data is not None and len(purchase_data) > 0:
+            purchases_by_category = purchase_data.groupby('Отдел товара').agg({
+                'Количество упаковок, шт.': 'sum'
+            }).reset_index()
+            purchases_by_category = purchases_by_category.rename(columns={
+                'Количество упаковок, шт.': 'Поступило_единиц'
+            })
+            
+            # Объединяем продажи и поступления
+            category_stats = pd.merge(
+                sales_by_category, 
+                purchases_by_category, 
+                on='Отдел товара', 
+                how='left'
+            ).fillna(0)
+            
+            # Рассчитываем остаток
+            category_stats['Остаток_от_продаж'] = (
+                category_stats['Проданных_единиц'] - category_stats['Поступило_единиц']
+            )
+        else:
+            category_stats = sales_by_category
+            category_stats['Остаток_от_продаж'] = category_stats['Проданных_единиц']
+        
+        # Сортировка по алфавиту
+        category_stats = category_stats.sort_values('Отдел товара').reset_index(drop=True)
+        
+        logger.info(f"Агрегация по категориям завершена. {len(category_stats)} категорий.")
+        return category_stats
+        
+    except Exception as e:
+        logger.error(f"ОШИБКА ПРИ АШРЕГАЦИИ ПО КАТЕГОРИЯМ: {e}")
         return None
 
-    grouped_data = sales_data.groupby('Название товара', as_index=False).agg({agg_col: agg_func})
-    grouped_data = grouped_data.rename(columns={agg_col: result_col})
-    data_sorted = grouped_data.sort_values(by=result_col, ascending=False)
-    return data_sorted.head(n).reset_index(drop=True)
-
+def get_top_n_products(data_clean, n=5, metric='quantity'):
+    """
+    Находит топ-N проданных товаров по выбранному критерию.
+    """
+    if data_clean is None or len(data_clean) == 0:
+        logger.warning("Нет данных для поиска топ-продуктов.")
+        return None
+    
+    # Проверяем допустимость метрики
+    if metric not in ['quantity', 'revenue']:
+        logger.error(f" НЕВЕРНАЯ МЕТРИКА: {metric}. Допустимо: 'quantity' или 'revenue'")
+        return None
+    
+    try:
+        # Получаем только продажи
+        sales_data = get_operational_data(data_clean, operation_type='Продажа')
+        if sales_data is None or len(sales_data) == 0:
+            logger.warning("Нет данных о продажах.")
+            return None
+        
+        # Группируем по товарам
+        product_sales = sales_data.groupby(['Артикул', 'Название товара']).agg({
+            'Сумма операции': 'sum',
+            'Количество упаковок, шт.': 'sum'
+        }).reset_index()
+        
+        product_sales = product_sales.rename(columns={
+            'Сумма операции': 'Выручка',
+            'Количество упаковок, шт.': 'Кол-во_упаковок'
+        })
+        
+        # Сортировка по выбранной метрике
+        if metric == 'quantity':
+            top_products = product_sales.sort_values('Кол-во_упаковок', ascending=False).head(n)
+        else:  # metric == 'revenue'
+            top_products = product_sales.sort_values('Выручка', ascending=False).head(n)
+        
+        logger.info(f"Топ-{n} продуктов по {metric} найдено.")
+        return top_products.reset_index(drop=True)
+        
+    except Exception as e:
+        logger.error(f"ОШИБКА ПРИ ПОИСКЕ ТОП-ПРОДУКТОВ: {e}")
+        return None
 
 def analyze_inventory_turnover(data_clean, top_n=10):
-    sales_data = get_operational_data(data_clean, "продажа")
-    purchases_data = get_operational_data(data_clean, "поступление")
+    """
+    Анализирует движение товаров, сопоставляя объёмы продаж и поступлений
+    по каждому товару (артикулу).
+    """
+    if data_clean is None or len(data_clean) == 0:
+        logger.warning("Нет данных для анализа оборачиваемости.")
+        return None
+    
+    try:
+        # Получаем продажи
+        sales = get_operational_data(data_clean, operation_type='Продажа')
+        if sales is None or len(sales) == 0:
+            logger.warning("Нет данных о продажах.")
+            return None
+        
+        # Получаем поступления
+        purchases = get_operational_data(data_clean, operation_type='Поступление')
+        if purchases is None or len(purchases) == 0:
+            logger.warning("Нет данных о поступлениях.")
+            return None
+        
+        # Группируем продажи по товарам
+        sales_by_product = sales.groupby(['Артикул', 'Название товара']).agg({
+            'Количество упаковок, шт.': 'sum',
+            'Сумма операции': 'sum'
+        }).reset_index()
+        sales_by_product = sales_by_product.rename(columns={
+            'Количество упаковок, шт.': 'Продано_упаковок',
+            'Сумма операции': 'Выручка_от_продаж'
+        })
+        
+        # Группируем поступления по товарам
+        purchases_by_product = purchases.groupby(['Артикул', 'Название товара']).agg({
+            'Количество упаковок, шт.': 'sum'
+        }).reset_index()
+        purchases_by_product = purchases_by_product.rename(columns={
+            'Количество упаковок, шт.': 'Поступлено_упаковок'
+        })
+        
+        # Объединяем
+        inventory_analysis = pd.merge(
+            sales_by_product,
+            purchases_by_product,
+            on=['Артикул', 'Название товара'],
+            how='outer'
+        ).fillna(0)
+        
+        # Рассчитываем разницу
+        inventory_analysis['Разница_упаковок'] = (
+            inventory_analysis['Продано_упаковок'] - inventory_analysis['Поступлено_упаковок']
+        )
+        
+        # Сортируем по абсолютному значению разницы
+        inventory_analysis['Абс_разница'] = inventory_analysis['Разница_упаковок'].abs()
+        inventory_analysis = inventory_analysis.sort_values('Абс_разница', ascending=False).head(top_n)
+        inventory_analysis = inventory_analysis.drop(columns=['Абс_разница'])
 
-    # Продажи
-    sales_grouped = sales_data.groupby(['Артикул', 'Название товара']).agg({
-        'Количество упаковок': 'sum',
-        'Сумма операции': 'sum'
-    }).reset_index()
-    sales_grouped = sales_grouped.rename(columns={
-        'Количество упаковок': 'Продано_упаковок',
-        'Сумма операции': 'Выручка_от_продаж'
-    })
-
-    # Поступления
-    purchases_grouped = purchases_data.groupby(['Артикул', 'Название товара']).agg({
-        'Количество упаковок': 'sum',
-        'Сумма операции': 'sum'
-    }).reset_index()
-    purchases_grouped = purchases_grouped.rename(columns={
-        'Количество упаковок': 'Поступлено_упаковок',
-        'Сумма операции': 'Затраты_на_закупки'
-    })
-
-    # Объединение
-    inventory_analysis = pd.merge(
-        sales_grouped, purchases_grouped,
-        on=['Артикул', 'Название товара'],
-        how='outer'
-    ).fillna(0)
-
-    inventory_analysis['Разница_упаковок'] = (
-        inventory_analysis['Продано_упаковок'] - inventory_analysis['Поступлено_упаковок']
-    )
-    inventory_analysis['Прибыль'] = (
-        inventory_analysis['Выручка_от_продаж'] - inventory_analysis['Затраты_на_закупки']
-    )
-
-    # Рентабельность (избегаем деления на ноль)
-    mask = inventory_analysis['Затраты_на_закупки'] > 0
-    inventory_analysis['Рентабельность_%'] = 0
-    inventory_analysis.loc[mask, 'Рентабельность_%'] = (
-        (inventory_analysis.loc[mask, 'Прибыль'] / inventory_analysis.loc[mask, 'Затраты_на_закупки']) * 100
-    )
-
-    # Форматирование
-    num_cols = ['Продано_упаковок', 'Поступлено_упаковок', 'Разница_упаковок']
-    for col in num_cols:
-        inventory_analysis[col] = inventory_analysis[col].astype(int)
-
-    money_cols = ['Выручка_от_продаж', 'Затраты_на_закупки', 'Прибыль']
-    for col in money_cols:
-        inventory_analysis[col] = inventory_analysis[col].round(2)
-
-    inventory_analysis['Рентабельность_%'] = inventory_analysis['Рентабельность_%'].round(2)
-
-    # Сортировка по абсолютной разнице
-    inventory_analysis['Абс_разница'] = inventory_analysis['Разница_упаковок'].abs()
-    inventory_analysis = inventory_analysis.sort_values('Абс_разница', ascending=False)
-    inventory_analysis = inventory_analysis.drop('Абс_разница', axis=1)
-
-    return inventory_analysis.head(top_n).reset_index(drop=True)
-
-
-def get_inventory_insights(inventory_analysis):
-    insights = {
-        'overstock_candidates': [],
-        'understock_candidates': [],
-        'most_profitable': [],
-        'least_profitable': [],
-        'summary_stats': {}
-    }
-
-    if inventory_analysis.empty:
-        return insights
-
-    # Дефицит: продажи > поступлений (разница > средней)
-    mean_sales = inventory_analysis['Продано_упаковок'].mean()
-    overstock_threshold = mean_sales * 0.3
-    overstock_items = inventory_analysis[inventory_analysis['Разница_упаковок'] > overstock_threshold]
-
-    # Излишек: поступления > продаж
-    understock_threshold = -mean_sales * 0.3
-    understock_items = inventory_analysis[inventory_analysis['Разница_упаковок'] < understock_threshold]
-
-    # Топ прибыльных и убыточных
-    most_profitable = inventory_analysis.nlargest(5, 'Прибыль')
-    least_profitable = inventory_analysis.nsmallest(5, 'Прибыль')
-
-    # Заполнение insights
-    insights['overstock_candidates'] = overstock_items[[
-        'Артикул', 'Название товара', 'Продано_упаковок', 'Поступлено_упаковок', 'Разница_упаковок'
-    ]].to_dict('records')
-
-    insights['understock_candidates'] = understock_items[[
-        'Артикул', 'Название товара', 'Продано_упаковок', 'Поступлено_упаковок', 'Разница_упаковок'
-    ]].to_dict('records')
-
-    insights['most_profitable'] = most_profitable[[
-        'Артикул', 'Название товара', 'Прибыль', 'Рентабельность_%', 'Выручка_от_продаж', 'Затраты_на_закупки'
-    ]].to_dict('records')
-
-    insights['least_profitable'] = least_profitable[[
-        'Артикул', 'Название товара', 'Прибыль', 'Рентабельность_%', 'Выручка_от_продаж', 'Затраты_на_закупки'
-    ]].to_dict('records')
-
-    # Сводная статистика
-    insights['summary_stats'] = {
-        'total_items': len(inventory_analysis),
-        'total_revenue': inventory_analysis['Выручка_от_продаж'].sum(),
-        'total_costs': inventory_analysis['Затраты_на_закупки'].sum(),
-        'total_profit': inventory_analysis['Прибыль'].sum(),
-        'avg_profitability': inventory_analysis['Рентабельность_%'].mean(),
-        'items_with_deficit': len(overstock_items),
-        'items_with_excess': len(understock_items)
-    }
-
-    return insights
+        logger.info(f"Анализ оборачиваемости завершён. Топ-{top_n} товаров.")
+        return inventory_analysis.reset_index(drop=True)
+        
+    except Exception as e:
+        logger.error(f"ОШИБКА ПРИ АНАЛИЗЕ ОБОРАЧИВАЕМОСТИ: {e}")
+        return None
