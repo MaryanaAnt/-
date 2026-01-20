@@ -426,6 +426,7 @@ def calculate_reorder_point(lead_time_days, avg_daily_sales, safety_stock):
     :return: Точка заказа (целое число)
     """
     return int(lead_time_days * avg_daily_sales + safety_stock)
+    
 def identify_slow_moving_items(data, days_back=90, sales_threshold=5):
     """
     Выявляет товары, которые "застоялись" на складе — мало продаются, но есть в остатках.
@@ -445,7 +446,6 @@ def identify_slow_moving_items(data, days_back=90, sales_threshold=5):
     cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=days_back)
 
     # Фильтруем только продажи за последние N дней
-    # Используем реальные имена столбцов!
     sales_data = data[
         (data['Тип операции'] == 'Продажа') & 
         (data['Дата'] >= cutoff_date)
