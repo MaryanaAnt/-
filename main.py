@@ -61,7 +61,11 @@ def main():
 
     # Оборачиваемость
     turnover_analysis = manager.inventory_turnover(top_n=10)
-
+   
+   # --- НОВЫЙ АНАЛИЗ: МЕДЛЕННО ДВИЖУЩИЕСЯ ТОВАРЫ ---
+    slow_moving = manager.get_slow_moving_items_report(days_back=90, sales_threshold=5)
+    print("Анализ медленно движущихся товаров завершён.")
+   
     # Формирование текстового отчёта
     report = []
 
@@ -81,7 +85,7 @@ def main():
 
     # Прибыль
     if profit is not None and not profit.empty:
-        report.append("💰 ПРИБЫЛЬ ПО ДНЯМ (первые 10 записей):")
+        report.append(" ПРИБЫЛЬ ПО ДНЯМ (первые 10 записей):")
         report.append(profit.head(10).to_string(index=False))
         report.append("")
     else:
@@ -109,6 +113,15 @@ def main():
     if turnover_analysis is not None and not turnover_analysis.empty:
         report.append(" АНАЛИЗ ОБОРАЧИВАЕМОСТИ ТОВАРОВ (ТОП-10):")
         report.append(turnover_analysis.to_string(index=False))
+        report.append("")
+
+    # --- МЕДЛЕННО ДВИЖУЩИЕСЯ ТОВАРЫ ---
+    if slow_moving is not None and not slow_moving.empty:
+        report.append(" ТОВАРЫ, КОТОРЫЕ 'ЗАСТОЯЛИСЬ' НА СКЛАДЕ (за 90 дней):")
+        report.append(slow_moving.to_string(index=False))
+        report.append("")
+    else:
+        report.append("  НЕТ ТОВАРОВ, КОТОРЫЕ ЗАСТОЯЛИСЬ НА СКЛАДЕ (все товары активны).")
         report.append("")
 
     report.append(" АНАЛИЗ ЗАВЕРШЁН.")
