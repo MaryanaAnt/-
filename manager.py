@@ -10,6 +10,12 @@ from process import (
     get_top_n_products,
     analyze_inventory_turnover
 )
+from process import (
+    get_operational_data,
+    calculate_revenue_by_period,
+    calculate_reorder_point,
+    identify_slow_moving_items  # ← НОВАЯ ФУНКЦИЯ
+)
 
 class InventoryManager:
     def __init__(self):
@@ -349,5 +355,91 @@ class InventoryManager:
         self.plot_inventory_turnover_chart(top_n=10, 
                                           save_path=f"{output_dir}/inventory_turnover.png")
         
+         # 7. Медленно движущиеся товары
+        slow_moving = self.get_slow_moving_items_report(days_back=90, sales_threshold=5)
+        if slow_moving is not None and not slow_moving.empty:
+            self.plot_slow_moving_items(slow_moving, save_path=f"{output_dir}/slow_moving_items.png")
+        else:
+            print(" Нет данных для визуализации медленно движущихся товаров.")
+
         print(f"\n Все графики сохранены в папке: {output_dir}/")
         print("Визуализация завершена!")
+
+    def get_slow_moving_items_report(self, days_back=90, sales_threshold=5):
+        """
+    Возвращает отчет о товарах, которые "застоялись" на складе.
+    
+    Это ключевой отчет для закупщиков и менеджеров склада.
+    Позволяет:
+    - Выявить товары, требующие акций или вывода из ассортимента
+    - Освободить складские площади
+    - Снизить издержки на хранение
+    
+    Пример использования:
+        report = manager.get_slow_moving_items_report(days_back=60, sales_threshold=3)
+        print(report)
+        """
+        return identify_slow_moving_items(
+            self.data_clean, 
+            days_back=days_back, 
+            sales_threshold=sales_threshold
+        )
+    
+    def plot_slow_moving_items(self, slow_moving, save_path=None):
+        """
+        Визуализирует медленно движущиеся товары: горизонтальный бар-чарт.
+        Продажи за 90 дней vs текущий остаток.
+        """
+        if slow_moving.empty:
+            print("⚠️ Нет данных для визуализации медленно движущихся товаров.")
+            return None
+
+        # Сортируем по остатку (убывание) — самые "застоявшиеся" наверху
+        slow_moving = slow_moving.sort_values('Текущий остаток', ascending=False).reset_index(drop=True)
+
+        # Подготовка данных
+        labels = [f"{row['Название товара']}\n(арт. {row['Артикул']})" 
+                 for _, row in slow_moving.iterrows()]
+        sales = slow_moving['Продано за период']
+        stock = slow_moving['Текущий остаток']
+
+        # Настройка графика
+        fig, ax = plt.subplots(figsize=(14, max(8, len(slow_moving) * 0.5)))  # Динамическая высота
+        y_pos = range(len(slow_moving))
+
+        # Горизонтальные столбики
+        bar_height = 0.35
+        ax.barh([y - bar_height/2 for y in y_pos], sales, 
+                height=bar_height, label='Продано за 90 дней', color='orange', alpha=0.8)
+        ax.barh([y + bar_height/2 for y in y_pos], stock, 
+                height=bar_height, label='Текущий остаток', color='red', alpha=0.8)
+
+        # Подписи оси Y — названия товаров
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=10, ha='right')
+        
+        # Подписи на столбцах — только если значение > 0
+        for i, (s, st) in enumerate(zip(sales, stock)):
+            if s > 0:
+                ax.text(s + 0.5, i - bar_height/2, f'{int(s)}', 
+                        va='center', ha='left', fontsize=9, fontweight='bold', color='darkorange')
+            if st > 0:
+                ax.text(st + 0.5, i + bar_height/2, f'{int(st)}', 
+                        va='center', ha='left', fontsize=9, fontweight='bold', color='darkred')
+
+        # Стиль графика
+        ax.set_title('Медленно движущиеся товары: продажи за 90 дней vs текущий остаток', 
+                     fontsize=14, fontweight='bold', pad=20)
+        ax.set_xlabel('Количество упаковок', fontsize=12)
+        ax.legend(loc='lower right', fontsize=11)
+        ax.grid(axis='x', alpha=0.3, linestyle='--')
+
+        # Улучшаем отступы
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+            print(f"📈 График медленно движущихся товаров сохранён: {save_path}")
+
+        plt.show()
+        return slow_moving
